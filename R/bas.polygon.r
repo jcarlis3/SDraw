@@ -2,7 +2,7 @@
 #' 
 #' @title Draws a Balanced Acceptance Sample (BAS) from an area resource (polygons).
 #' 
-#' @description Draws a BAS sample from a SpatialPolygons* object
+#' @description Draws a BAS sample from an sf polygon object
 #' 
 #' @details A BAS sample is drawn from the union of all polygons in \code{x} by
 #' enclosing all polygons in a bounding square and selecting a randomized
@@ -16,13 +16,12 @@
 #' @param n Sample size.  Number of locations to draw from the union of all
 #' polygons contained in \code{x}.
 #' 
-#' @param x A \code{SpatialPolygons} or \code{SpatialPolygonsDataFrame} object. 
-#' This object
-#' must contain at least 1 polygon.  If it contains more than 1 polygon, the
-#' BAS sample is drawn from the union of all.
+#' @param x A \code{sf} object. This object must contain at least 1 polygon.
+#' If it contains more than 1 polygon, the BAS sample is drawn from the union
+#' of all.
 #' 
 #' @return A \code{SDrawSample} object, which is a  
-#' \code{SpatialPointsDataFrame} object containing points in the BAS sample, 
+#' \code{sf} object containing points in the BAS sample, 
 #' in BAS order.
 #'  Attributes of the sample points are: 
 #' \itemize{
@@ -38,7 +37,7 @@
 #' }
 #'
 #' Additional attributes of the output object, beyond those which 
-#' make it a \code{SpatialPointsDataFrame}, are:
+#' make it a \code{sf} object, are:
 #' \itemize{
 #'    \item \code{frame}: Name of the input sampling frame.
 #'    \item \code{frame.type}: Type of resource in sampling frame. (i.e., "polygon").
@@ -100,39 +99,29 @@ if( n < 1 ){
 }
 
 #   Find bounding box around everything
-bb <- bbox( x )
+bb <- sf::st_bbox(x)
+# Reformat matrix to match formatting from sp::bbox to save from cascading edits
+bb <- matrix(bb, nrow=2, byrow=FALSE,
+             dimnames=list(c("x", "y"), c("min", "max")))
 
 #   Find area of all polygons
-# Could call gArea at this point.  But, If x is not projected, 
-# gArea generates a warning.  Could suppress it, but, I've chosen 
-# to compute my own area, which accounts for holes and does not 
-# care whether x is projected.  I think i can drop dependency on rgeos 
-# if I do this.
-# Here is the call to gArea
-#area <- suppressWarnings((rgeos::gArea(x)))  
-
-# Here is the call to my routine.
-area <- polygonArea(x)
+# Sums across area for each feature (if multiple features)
+# Problematic behavior for unprojected CRSs (e.g., lat lon) -- bbox is returned
+# in decimal degrees, but area is returned in square meters.  For cases I tested
+# p comes back as 1, so the effect is likely limited to reducing the efficiency
+# of the function in returning the right number of points, doesn't actually
+# create problematic output.  See ?sf::geos_measures for details.
+area <- sum(sf::st_area(x))
 
 #   Find fraction of the square Halton box covered by the polygons
 p <- min(1, area / max(diff(t(bb)))^2 )
 
+
 my.dim <- 2 # number of dimensions we are sampling. leave this here
             # to make it easier to expand to dim > 2
 
-#   Make sure there is a non-missing attribute associated with each polygon in x.
-#   This is because over() extracts attributes of x, and missingness is used 
-#   to flag which points are outside a polygon.
-if( inherits(x, "SpatialPolygonsDataFrame") ){
-  #   x has a data frame
-  df <- data.frame( sampleID=1:length(x), geometryID=row.names(x), data.frame(x) )
-} else {
-  df <- data.frame( sampleID=1:length(x), geometryID=row.names(x),  row.names=row.names(x) )
-}
-
-x <- SpatialPolygonsDataFrame( x, data=df )
-
-crs.obj <- CRS(proj4string(x))
+# Coordinate reference system to use for output
+crs.obj <- sf::st_crs(x)
 
 #   Draw initial random start, but make sure the first point is inside the study area.
 q <- 1 - p
@@ -159,7 +148,7 @@ xr <- bb[1,"min"] + d.box[1]
 yl <- bb[2,"min"]
 yu <- bb[2,"min"] + d.box[2]
 bas.bbox <- matrix( c(xl,yl,xr,yu), 2)
-dimnames(bas.bbox) <- list(coordnames(x),c("min","max"))
+dimnames(bas.bbox) <- list(c("x", "y"), c("min", "max"))
 
 # Find first Halton point after random start that is in polygon
 repeat{
@@ -177,13 +166,18 @@ repeat{
   
 #  cat("dim halt.samp : "); cat(nrow(halt.samp)); cat("\n")
 #  cat(paste("n.init=",n.init,"\n"))
-                                                    
-  halt.pts <- SpatialPointsDataFrame(halt.samp, data=data.frame(sampleID=1:n.init),
-                                     proj4string=crs.obj )
+
+                                                      
+  # the in.poly and keep portions could be simplified to just return logical
+  # instead of the step of 1s and NAs, but kept with old steps
+  halt.pts <- sf::st_as_sf(x=data.frame(sampleID=1:n.init,
+                                        X=halt.samp[, 1],
+                                        Y=halt.samp[, 2]),
+                           coords=c("X", "Y"),
+                           crs=crs.obj)
   
-  in.poly <- over( halt.pts, x )
-  
-  keep <- !is.na( in.poly$sampleID )
+  in.poly <- sapply(sf::st_intersects(halt.pts, x), function(z) if (length(z)==0) NA_integer_ else z[1])
+  keep <- !is.na(in.poly)
   
   if(any(keep)) break
 }
@@ -228,19 +222,28 @@ repeat{
   halt.samp <- bas.bbox[,"min"] + t(halt.samp) * d.box
   halt.samp <- t(halt.samp)
   
-  #   Check which are in the polygon, after first converting halt.samp to SpatialPoints
+  #   Check which are in the polygon, after first converting halt.samp to sf object
   #   And adding to points from previous iteration
   #   sampleID in this data frame gets overwritten below when assign to @data
 
-  crds <- rbind(coordinates(halt.pts), halt.samp)
-  halt.pts <- SpatialPointsDataFrame(crds, 
-                    data=data.frame(sampleID=1:nrow(crds)),
-                    proj4string = crs.obj)
-
-  in.poly <- over( halt.pts, x )
+  crds <- rbind(sf::st_coordinates(halt.pts), halt.samp)
+  # halt.pts <- SpatialPointsDataFrame(crds, 
+  #                   data=data.frame(sampleID=1:nrow(crds)),
+  #                   proj4string = crs.obj)
+  # 
+  # in.poly <- over( halt.pts, x )
+  
+  halt.pts <- sf::st_as_sf(x=data.frame(sampleID=1:nrow(crds),
+                                        X=crds[, 1],
+                                        Y=crds[, 2]),
+                           coords=c("X", "Y"),
+                           crs=crs.obj)
+  
+  in.poly <- sapply(sf::st_intersects(halt.pts, x), function(z) if (length(z)==0) NA_integer_ else z[1])
+  
   
   #   Reject the points outside the polygon, and attach other attributes if present
-  keep <- !is.na( in.poly$sampleID )  # in.poly$sampleID is row num of polygon in x
+  keep <- !is.na(in.poly)
 
   if( sum(keep) >= n ){
       break
@@ -253,11 +256,24 @@ repeat{
 
 
 # Attach attributes
-halt.pts@data <- data.frame( in.poly )
-halt.pts <- halt.pts[ keep, ]
+# Extracts attributes and drops points that don't overlap
+# Issues a warning that I'm pretty sure isn't important...
+# Beware that the output is ordered by the feature order of x, which means the
+# step below of keeping 1:n might completely break the spatial balance if there
+# are multiple features in x.  So resort by sampleID.
+halt.pts <- suppressWarnings(sf::st_intersection(halt.pts, x))
+halt.pts <- halt.pts[order(halt.pts$sampleID), ]
+
+# # Plot to check
+# plot(st_geometry(x))
+# plot(st_geometry(halt.pts), add=TRUE)
 
 halt.pts <- halt.pts[1:n,]
 halt.pts$sampleID <- 1:n   # renumber the site ID's because some (those outside polygon) were tossed above
+
+# # Plot to check
+# plot(st_geometry(x))
+# plot(st_geometry(halt.pts), add=TRUE)
 
 
 attr(halt.pts, "frame") <- deparse(substitute(x))
@@ -266,6 +282,6 @@ attr(halt.pts, "sample.type") <- "BAS"
 attr(halt.pts, "random.start") <- halt.start
 attr(halt.pts, "bas.bbox") <- bas.bbox
 
-halt.pts
+return(halt.pts)
 
 }
