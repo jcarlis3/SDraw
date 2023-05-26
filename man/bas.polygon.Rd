@@ -7,17 +7,16 @@
 bas.polygon(x, n)
 }
 \arguments{
-\item{x}{A \code{SpatialPolygons} or \code{SpatialPolygonsDataFrame} object. 
-This object
-must contain at least 1 polygon.  If it contains more than 1 polygon, the
-BAS sample is drawn from the union of all.}
+\item{x}{A \code{sf} object. This object must contain at least 1 polygon.
+If it contains more than 1 polygon, the BAS sample is drawn from the union
+of all.}
 
 \item{n}{Sample size.  Number of locations to draw from the union of all
 polygons contained in \code{x}.}
 }
 \value{
 A \code{SDrawSample} object, which is a  
-\code{SpatialPointsDataFrame} object containing points in the BAS sample, 
+\code{sf} object containing points in the BAS sample, 
 in BAS order.
  Attributes of the sample points are: 
 \itemize{
@@ -33,7 +32,7 @@ in BAS order.
 }
 
 Additional attributes of the output object, beyond those which 
-make it a \code{SpatialPointsDataFrame}, are:
+make it a \code{sf} object, are:
 \itemize{
    \item \code{frame}: Name of the input sampling frame.
    \item \code{frame.type}: Type of resource in sampling frame. (i.e., "polygon").
@@ -64,7 +63,7 @@ make it a \code{SpatialPointsDataFrame}, are:
 }
 }
 \description{
-Draws a BAS sample from a SpatialPolygons* object
+Draws a BAS sample from an sf polygon object
 }
 \details{
 A BAS sample is drawn from the union of all polygons in \code{x} by
